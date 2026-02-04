@@ -12,6 +12,91 @@ from datetime import datetime
 import io
 
 # ============================================================
+# PROTECTION PAR MOT DE PASSE
+# ============================================================
+
+def check_password():
+    """
+    Gère l'authentification par mot de passe.
+    
+    Returns:
+        bool: True si authentifié, False sinon
+    """
+    # Essayer de récupérer le mot de passe depuis les secrets Streamlit Cloud
+    # Si pas de secrets (local), utiliser un mot de passe par défaut
+    try:
+        correct_password = st.secrets.get("password", "slotty2024")
+    except:
+        # En local, mot de passe par défaut
+        correct_password = "slotty2024"
+    
+    # Vérifier si déjà authentifié dans la session
+    if 'authenticated' not in st.session_state:
+        st.session_state.authenticated = False
+    
+    # Si pas encore authentifié, afficher l'écran de connexion
+    if not st.session_state.authenticated:
+        # Afficher l'écran de connexion
+        st.markdown("""
+        <style>
+        .login-container {
+            max-width: 400px;
+            margin: 100px auto;
+            padding: 40px;
+            background-color: #f0f2f6;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+        </style>
+        """, unsafe_allow_html=True)
+        
+        st.markdown('<div class="login-container">', unsafe_allow_html=True)
+        st.title("🔐 Slotty - Accès protégé")
+        st.markdown("### Veuillez vous connecter")
+        
+        # Champ de mot de passe
+        password = st.text_input(
+            "Mot de passe :",
+            type="password",
+            placeholder="Entrez votre mot de passe",
+            key="password_input"
+        )
+        
+        # Bouton de connexion
+        col1, col2, col3 = st.columns([1, 2, 1])
+        with col2:
+            login_button = st.button("🔓 Se connecter", use_container_width=True)
+        
+        # Vérifier le mot de passe
+        if login_button:
+            if password == correct_password:
+                st.session_state.authenticated = True
+                st.success("✅ Connexion réussie !")
+                st.rerun()
+            else:
+                st.error("❌ Mot de passe incorrect")
+        
+        # Info sur le mot de passe par défaut (à retirer en production)
+        with st.expander("ℹ️ Informations de connexion"):
+            st.info("""
+            **Mot de passe par défaut (local) :** `slotty2024`
+            
+            Pour changer le mot de passe sur Streamlit Cloud :
+            1. Va dans Settings de ton app
+            2. Secrets → Ajoute `password = "ton_nouveau_mdp"`
+            """)
+        
+        st.markdown('</div>', unsafe_allow_html=True)
+        
+        # Arrêter l'exécution ici si pas authentifié
+        st.stop()
+    
+    return True
+
+# Vérifier l'authentification avant de charger l'app
+check_password()
+
+# ============================================================
 # CONSTANTES - Extraction des valeurs magiques (FIX PRIORITÉ 2)
 # ============================================================
 TAUX_ULTRA_PROMO = 15  # En dessous de ce taux, réduction maximale appliquée
