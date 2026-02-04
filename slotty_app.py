@@ -718,12 +718,32 @@ if uploaded_file is not None:
         if len(df_filtre_g2) == 0:
             st.warning(f"⚠️ Aucune donnée pour {periode_filtre}")
         else:
-            # Définir HC/HP
-            df_filtre_g2['type_creneau'] = df_filtre_g2.apply(lambda row: 
-                'HP' if (row['jour_semaine_num'] >= 5 and row['heure_debut'] >= '17:00') or
-                        (row['jour_semaine_num'] >= 5 and row['heure_debut'] >= '10:00' and row['heure_debut'] <= '14:00')
-                else 'HC',
-                axis=1
+            # Définir HC/HP selon les règles du club
+            # HC (Heures Creuses) : Tous les jours 9h-12h et 13h30-17h
+            # HP (Heures Pleines) : Tout le reste (12h-13h30 et 17h-22h30)
+            def est_heure_creuse(heure_str):
+                """Détermine si un créneau est en Heure Creuse."""
+                try:
+                    heure = pd.to_datetime(heure_str, format='%H:%M').time()
+                    
+                    # HC matin : 9h-12h (strictement avant 12h)
+                    hc_matin_debut = pd.to_datetime('09:00', format='%H:%M').time()
+                    hc_matin_fin = pd.to_datetime('12:00', format='%H:%M').time()
+                    
+                    # HC après-midi : 13h30-17h (strictement avant 17h)
+                    hc_aprem_debut = pd.to_datetime('13:30', format='%H:%M').time()
+                    hc_aprem_fin = pd.to_datetime('17:00', format='%H:%M').time()
+                    
+                    if hc_matin_debut <= heure < hc_matin_fin:
+                        return True
+                    if hc_aprem_debut <= heure < hc_aprem_fin:
+                        return True
+                    return False
+                except:
+                    return False
+            
+            df_filtre_g2['type_creneau'] = df_filtre_g2['heure_debut'].apply(
+                lambda h: 'HC' if est_heure_creuse(h) else 'HP'
             )
             
             # Compter le nombre total d'heures réservées par terrain et type
