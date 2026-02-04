@@ -410,7 +410,8 @@ if uploaded_file is not None:
     # ONGLETS
     # ============================================================
     
-    tab0, tab1, tab2, tab3, tab_prix, tab4 = st.tabs([
+    tab_reco, tab0, tab1, tab2, tab3, tab_prix, tab4 = st.tabs([
+        "🎯 Recommandations",
         "🏟️ Terrains", 
         "📊 Vue d'ensemble", 
         "💰 Revenues", 
@@ -418,6 +419,287 @@ if uploaded_file is not None:
         "💵 Grille Prix",
         "📈 Détails"
     ])
+    
+    # ============================================================
+    # TAB RECOMMANDATIONS : AIDE À LA DÉCISION
+    # ============================================================
+    with tab_reco:
+        st.header("🎯 Recommandations de Pricing")
+        st.markdown("### Aide à la décision pour optimiser vos revenus")
+        
+        # ============================================================
+        # GRAPHIQUE 1 : PROPOSITION DE PRIX PAR CRÉNEAU (Interactif)
+        # ============================================================
+        st.subheader("💡 1. Proposition de prix par créneau")
+        st.markdown("Cliquez sur un créneau pour valider ou ajuster le prix proposé")
+        
+        # Initialiser les prix validés dans session_state si pas déjà fait
+        if 'prix_valides' not in st.session_state:
+            st.session_state.prix_valides = {}
+        
+        # Préparer les données pour le graphique
+        df_prix_proposition = remplissage.copy()
+        df_prix_proposition['jour_heure'] = df_prix_proposition['jour'] + ' ' + df_prix_proposition['heure']
+        df_prix_proposition['reduction_pct'] = df_prix_proposition['reduction'].round(0)
+        df_prix_proposition['statut_prix'] = df_prix_proposition.apply(
+            lambda row: 'Validé' if row['jour_heure'] in st.session_state.prix_valides else 'Proposé',
+            axis=1
+        )
+        
+        # Trier par réduction (plus forte réduction en haut)
+        df_prix_proposition = df_prix_proposition.sort_values('reduction', ascending=False).head(20)
+        
+        # Créer le graphique
+        fig_prix_prop = go.Figure()
+        
+        # Prix proposés (non validés)
+        df_proposes = df_prix_proposition[df_prix_proposition['statut_prix'] == 'Proposé']
+        fig_prix_prop.add_trace(go.Bar(
+            x=df_proposes['jour_heure'],
+            y=df_proposes['prix_dynamique'],
+            name='Prix proposé',
+            marker=dict(color='#FFA500', opacity=0.7),
+            text=df_proposes.apply(lambda r: f"{r['prix_dynamique']:.1f}€<br>(-{r['reduction_pct']:.0f}%)", axis=1),
+            textposition='outside',
+            hovertemplate='<b>%{x}</b><br>Prix proposé: %{y:.1f}€<br>Taux actuel: %{customdata[0]:.0f}%<br>Réduction: %{customdata[1]:.0f}%<extra></extra>',
+            customdata=df_proposes[['taux', 'reduction_pct']].values
+        ))
+        
+        # Prix validés
+        df_valides = df_prix_proposition[df_prix_proposition['statut_prix'] == 'Validé']
+        if len(df_valides) > 0:
+            fig_prix_prop.add_trace(go.Bar(
+                x=df_valides['jour_heure'],
+                y=df_valides['prix_dynamique'],
+                name='Prix validé ✓',
+                marker=dict(color='#4CAF50'),
+                text=df_valides.apply(lambda r: f"{r['prix_dynamique']:.1f}€<br>✓", axis=1),
+                textposition='outside'
+            ))
+        
+        fig_prix_prop.update_layout(
+            title="Top 20 créneaux à forte réduction - Cliquez pour valider",
+            xaxis_title="Jour et Heure",
+            yaxis_title="Prix proposé (€/joueur)",
+            height=500,
+            hovermode='x unified',
+            showlegend=True,
+            xaxis={'tickangle': -45}
+        )
+        
+        st.plotly_chart(fig_prix_prop, use_container_width=True, key="graphique_prix_proposition")
+        
+        # Interface de validation
+        col_val1, col_val2 = st.columns(2)
+        with col_val1:
+            if st.button("✅ Valider tous les prix proposés", use_container_width=True, type="primary"):
+                for _, row in df_prix_proposition.iterrows():
+                    st.session_state.prix_valides[row['jour_heure']] = row['prix_dynamique']
+                st.success(f"✅ {len(df_prix_proposition)} prix validés !")
+                st.rerun()
+        
+        with col_val2:
+            if st.button("🔄 Réinitialiser toutes les validations", use_container_width=True):
+                st.session_state.prix_valides = {}
+                st.info("🔄 Validations réinitialisées")
+                st.rerun()
+        
+        # Afficher le nombre de prix validés
+        nb_valides = len(st.session_state.prix_valides)
+        if nb_valides > 0:
+            st.info(f"📊 **{nb_valides} prix validé(s)** sur {len(remplissage)} créneaux au total")
+        
+        st.markdown("---")
+        
+        # ============================================================
+        # GRAPHIQUE 2 : TAUX D'OCCUPATION PAR TERRAIN (HC vs HP)
+        # ============================================================
+        st.subheader("📊 2. Taux d'occupation par terrain (du plus rempli au moins rempli)")
+        
+        # Calculer les taux par terrain et type de créneau (HC/HP)
+        # HC = Heures Creuses (semaine + weekend matin/fin journée)
+        # HP = Heures Pleines (weekend après-midi/soirée)
+        df['type_creneau'] = df.apply(lambda row: 
+            'HP' if (row['jour_semaine_num'] >= 5 and row['heure_debut'] >= '17:00') or
+                    (row['jour_semaine_num'] >= 5 and row['heure_debut'] >= '10:00' and row['heure_debut'] <= '14:00')
+            else 'HC',
+            axis=1
+        )
+        
+        # Calculer les taux par terrain
+        taux_par_terrain = df.groupby(['terrain', 'type_creneau']).agg({
+            'statut': lambda x: (x == 'réservé').sum() / len(x) * 100
+        }).reset_index()
+        taux_par_terrain.columns = ['terrain', 'type_creneau', 'taux']
+        
+        # Calculer le taux global par terrain pour le tri
+        taux_global = df.groupby('terrain').agg({
+            'statut': lambda x: (x == 'réservé').sum() / len(x) * 100
+        }).reset_index()
+        taux_global.columns = ['terrain', 'taux_global']
+        taux_global = taux_global.sort_values('taux_global', ascending=False)
+        
+        # Créer le graphique
+        fig_occupation = go.Figure()
+        
+        # Barres HC
+        df_hc = taux_par_terrain[taux_par_terrain['type_creneau'] == 'HC'].set_index('terrain')
+        df_hc = df_hc.reindex(taux_global['terrain'])
+        
+        fig_occupation.add_trace(go.Bar(
+            x=['Terrain ' + str(t) for t in df_hc.index],
+            y=df_hc['taux'].values,
+            name='Heures Creuses (HC)',
+            marker=dict(color='#87CEEB'),
+            text=df_hc['taux'].apply(lambda x: f"{x:.0f}%").values,
+            textposition='inside'
+        ))
+        
+        # Barres HP
+        df_hp = taux_par_terrain[taux_par_terrain['type_creneau'] == 'HP'].set_index('terrain')
+        df_hp = df_hp.reindex(taux_global['terrain'])
+        
+        fig_occupation.add_trace(go.Bar(
+            x=['Terrain ' + str(t) for t in df_hp.index],
+            y=df_hp['taux'].values,
+            name='Heures Pleines (HP)',
+            marker=dict(color='#FF6B6B'),
+            text=df_hp['taux'].apply(lambda x: f"{x:.0f}%").values,
+            textposition='inside'
+        ))
+        
+        fig_occupation.update_layout(
+            title="Taux d'occupation par terrain (triés du plus rempli au moins rempli)",
+            xaxis_title="Terrain",
+            yaxis_title="Taux d'occupation (%)",
+            height=450,
+            barmode='group',
+            showlegend=True,
+            yaxis=dict(range=[0, 100])
+        )
+        
+        st.plotly_chart(fig_occupation, use_container_width=True, key="graphique_occupation")
+        
+        # Insights
+        terrain_plus_rempli = taux_global.iloc[0]
+        terrain_moins_rempli = taux_global.iloc[-1]
+        
+        col_insight1, col_insight2 = st.columns(2)
+        with col_insight1:
+            st.success(f"🏆 **Terrain le plus performant : Terrain {terrain_plus_rempli['terrain']}**\n\n{terrain_plus_rempli['taux_global']:.0f}% de remplissage")
+        with col_insight2:
+            st.warning(f"⚠️ **Terrain à optimiser : Terrain {terrain_moins_rempli['terrain']}**\n\n{terrain_moins_rempli['taux_global']:.0f}% de remplissage - Potentiel de {100-terrain_moins_rempli['taux_global']:.0f}% d'amélioration")
+        
+        st.markdown("---")
+        
+        # ============================================================
+        # GRAPHIQUE 3 : REVENUS ACTUELS VS POTENTIEL PAR TERRAIN
+        # ============================================================
+        st.subheader("💰 3. Revenus actuels vs potentiel avec nos recommandations")
+        
+        # Calculer CA actuel par terrain
+        ca_actuel = df[df['statut'] == 'réservé'].groupby('terrain').agg({
+            'prix_par_joueur': lambda x: (x * JOUEURS_PAR_TERRAIN).sum()
+        }).reset_index()
+        ca_actuel.columns = ['terrain', 'ca_actuel']
+        
+        # Calculer CA potentiel avec yield management
+        # Fusionner avec les taux de remplissage
+        df_ca_potentiel = df.merge(
+            remplissage[['jour', 'heure', 'taux', 'prix_dynamique']],
+            left_on=['jour_semaine', 'heure_debut'],
+            right_on=['jour', 'heure'],
+            how='left'
+        )
+        
+        # CA potentiel = créneaux vides éligibles vendus au prix promo
+        df_ca_potentiel['ca_potentiel_ajout'] = df_ca_potentiel.apply(
+            lambda row: row['prix_dynamique'] * JOUEURS_PAR_TERRAIN * 0.35 
+            if row['statut'] == 'libre' and row['taux'] < seuil_remplissage 
+            else 0,
+            axis=1
+        )
+        
+        ca_potentiel = df_ca_potentiel.groupby('terrain').agg({
+            'ca_potentiel_ajout': 'sum'
+        }).reset_index()
+        ca_potentiel.columns = ['terrain', 'ca_ajout']
+        
+        # Fusionner
+        ca_comparaison = ca_actuel.merge(ca_potentiel, on='terrain')
+        ca_comparaison['ca_potentiel_total'] = ca_comparaison['ca_actuel'] + ca_comparaison['ca_ajout']
+        ca_comparaison['gain_pct'] = (ca_comparaison['ca_ajout'] / ca_comparaison['ca_actuel'] * 100).round(1)
+        
+        # Trier par CA actuel décroissant
+        ca_comparaison = ca_comparaison.sort_values('ca_actuel', ascending=False)
+        
+        # Créer le graphique
+        fig_revenus = go.Figure()
+        
+        # Barres CA actuel
+        fig_revenus.add_trace(go.Bar(
+            x=['Terrain ' + str(t) for t in ca_comparaison['terrain']],
+            y=ca_comparaison['ca_actuel'],
+            name='CA actuel',
+            marker=dict(color='#2196F3'),
+            text=ca_comparaison['ca_actuel'].apply(lambda x: f"{x:,.0f}€"),
+            textposition='inside',
+            textfont=dict(color='white')
+        ))
+        
+        # Ligne pointillée CA potentiel
+        fig_revenus.add_trace(go.Scatter(
+            x=['Terrain ' + str(t) for t in ca_comparaison['terrain']],
+            y=ca_comparaison['ca_potentiel_total'],
+            name='CA potentiel avec nos recommandations',
+            mode='lines+markers+text',
+            line=dict(color='#4CAF50', width=3, dash='dot'),
+            marker=dict(size=10, color='#4CAF50'),
+            text=ca_comparaison.apply(lambda r: f"+{r['gain_pct']:.0f}%", axis=1),
+            textposition='top center',
+            textfont=dict(color='#4CAF50', size=12, family='Arial Black')
+        ))
+        
+        fig_revenus.update_layout(
+            title="Revenus par terrain - Actuel vs Potentiel",
+            xaxis_title="Terrain",
+            yaxis_title="Chiffre d'affaires (€)",
+            height=500,
+            showlegend=True,
+            hovermode='x unified'
+        )
+        
+        st.plotly_chart(fig_revenus, use_container_width=True, key="graphique_revenus")
+        
+        # Résumé des gains potentiels
+        gain_total = ca_comparaison['ca_ajout'].sum()
+        ca_actuel_total = ca_comparaison['ca_actuel'].sum()
+        gain_pct_total = (gain_total / ca_actuel_total * 100)
+        
+        st.success(f"""
+        ### 🎯 Résumé des opportunités
+        
+        **CA actuel sur la période :** {ca_actuel_total:,.0f}€
+        
+        **Gain potentiel avec nos recommandations :** +{gain_total:,.0f}€ *({gain_pct_total:.1f}% d'augmentation)*
+        
+        **CA potentiel total :** {ca_actuel_total + gain_total:,.0f}€
+        """)
+        
+        # Tableau détaillé
+        with st.expander("📋 Voir le détail par terrain"):
+            df_detail = ca_comparaison.copy()
+            df_detail['Terrain'] = 'Terrain ' + df_detail['terrain'].astype(str)
+            df_detail['CA actuel'] = df_detail['ca_actuel'].apply(lambda x: f"{x:,.0f}€")
+            df_detail['Gain potentiel'] = df_detail['ca_ajout'].apply(lambda x: f"+{x:,.0f}€")
+            df_detail['CA potentiel'] = df_detail['ca_potentiel_total'].apply(lambda x: f"{x:,.0f}€")
+            df_detail['Augmentation'] = df_detail['gain_pct'].apply(lambda x: f"+{x:.1f}%")
+            
+            st.dataframe(
+                df_detail[['Terrain', 'CA actuel', 'Gain potentiel', 'CA potentiel', 'Augmentation']],
+                use_container_width=True,
+                hide_index=True
+            )
     
     # ============================================================
     # TAB 0 : VUE D'ENSEMBLE TERRAINS
