@@ -428,16 +428,21 @@ if uploaded_file is not None:
         st.markdown("### Aide à la décision pour optimiser vos revenus")
         
         # ============================================================
-        # GRAPHIQUE 1 : HEATMAP PRIX AVEC CRÉNEAUX RECOMMANDÉS ENTOURÉS
+        # GRAPHIQUE 1 : HEATMAP INTERACTIF AVEC VALIDATION
         # ============================================================
         st.subheader("💡 1. Grille de prix recommandés par créneau")
-        st.markdown("Les créneaux avec bordure orange sont nos **recommandations prioritaires** (forte réduction)")
+        st.markdown("**Vert** = Recommandé | **Gris** = Normal | Cliquez pour valider/modifier un prix")
+        
+        # Initialiser les validations dans session_state
+        if 'prix_valides' not in st.session_state:
+            st.session_state.prix_valides = {}  # {(jour, heure): prix}
         
         # Préparer les données pour le heatmap
         df_heatmap = remplissage.copy()
         
         # Identifier les créneaux à recommander (réduction > 30%)
         df_heatmap['a_recommander'] = df_heatmap['reduction'] >= 30
+        df_heatmap['creneau_id'] = df_heatmap['jour'] + '_' + df_heatmap['heure']
         
         # Créer le pivot pour les prix
         pivot_prix = df_heatmap.pivot(index='jour', columns='heure', values='prix_dynamique')
@@ -455,10 +460,13 @@ if uploaded_file is not None:
         pivot_reduction = df_heatmap.pivot(index='jour', columns='heure', values='reduction')
         pivot_reduction = pivot_reduction.reindex(JOURS_ORDRE_FR)
         
-        # Créer le texte d'affichage et hover
+        # Créer la matrice de couleurs personnalisée (vert si recommandé, gris sinon)
+        z_colors = []
         text_display = []
         hover_text = []
+        
         for i in range(len(pivot_prix.index)):
+            row_colors = []
             row_text = []
             row_hover = []
             for j in range(len(pivot_prix.columns)):
@@ -466,101 +474,200 @@ if uploaded_file is not None:
                 taux = pivot_taux.iloc[i, j]
                 reduction = pivot_reduction.iloc[i, j]
                 recommande = pivot_recommande.iloc[i, j]
+                jour = pivot_prix.index[i]
+                heure = pivot_prix.columns[j]
                 
                 if pd.notna(prix):
+                    # Valeur pour le colorscale (0=recommandé/vert, 1=normal/gris)
+                    row_colors.append(0 if recommande else 1)
+                    
                     # Texte à afficher dans la case
                     row_text.append(f"{prix:.1f}€")
                     
                     # Hover détaillé
-                    recommande_text = "🎯 RECOMMANDÉ" if recommande else ""
+                    recommande_text = "🎯 RECOMMANDÉ - Cliquez pour valider" if recommande else "Cliquez pour modifier le prix"
                     row_hover.append(
-                        f"<b>{pivot_prix.index[i]} - {pivot_prix.columns[j]}</b><br>"
+                        f"<b>{jour} - {heure}</b><br>"
                         f"Prix proposé: {prix:.1f}€<br>"
                         f"Taux actuel: {taux:.0f}%<br>"
                         f"Réduction: -{reduction:.0f}%<br>"
                         f"{recommande_text}"
                     )
                 else:
+                    row_colors.append(2)  # Valeur neutre pour cases vides
                     row_text.append("")
                     row_hover.append("Pas de données")
             
+            z_colors.append(row_colors)
             text_display.append(row_text)
             hover_text.append(row_hover)
         
-        # Créer le heatmap de base
+        # Créer le heatmap avec colorscale binaire (vert/gris)
         fig_heatmap_prix = go.Figure(data=go.Heatmap(
-            z=pivot_prix.values,
+            z=z_colors,
             x=pivot_prix.columns,
             y=pivot_prix.index,
             colorscale=[
-                [0, '#4CAF50'],      # Vert pour prix bas (promo forte)
-                [0.5, '#FFC107'],    # Jaune pour prix moyen
-                [1, '#FF5722']       # Rouge pour prix élevé
+                [0, '#4CAF50'],      # Vert = Recommandé
+                [0.5, '#9E9E9E'],    # Gris = Normal
+                [1, '#9E9E9E']       # Gris = Normal
             ],
             text=text_display,
             texttemplate='%{text}',
             textfont={"size": 11, "color": "white", "family": "Arial Black"},
             hovertext=hover_text,
             hoverinfo='text',
-            colorbar=dict(title="Prix (€)", x=1.02),
-            zmin=prix_plancher,
-            zmax=15,
-            showscale=True
+            showscale=False  # Pas besoin de colorbar
         ))
         
-        # Ajouter des rectangles orange autour des créneaux recommandés
-        shapes = []
-        for i in range(len(pivot_prix.index)):
-            for j in range(len(pivot_prix.columns)):
-                if pivot_recommande.iloc[i, j] == True:
-                    # Ajouter un rectangle orange autour de ce créneau
-                    shapes.append(dict(
-                        type="rect",
-                        x0=j - 0.5,
-                        y0=i - 0.5,
-                        x1=j + 0.5,
-                        y1=i + 0.5,
-                        line=dict(
-                            color="orange",
-                            width=4
-                        ),
-                        fillcolor="rgba(0,0,0,0)"  # Transparent
-                    ))
-        
         fig_heatmap_prix.update_layout(
-            title="Grille de prix recommandés - Créneaux avec bordure orange = Prioritaires",
+            title="Grille de prix recommandés - Vert = Nos recommandations",
             xaxis_title="Heure de début",
             yaxis_title="Jour de la semaine",
             height=600,
-            shapes=shapes,
             xaxis={'side': 'bottom'}
         )
         
         st.plotly_chart(fig_heatmap_prix, use_container_width=True, key="heatmap_prix_recommandations")
         
-        # Légende
-        col_leg1, col_leg2, col_leg3 = st.columns(3)
-        with col_leg1:
-            st.markdown("🟢 **Vert** : Prix promo (opportunité)")
-        with col_leg2:
-            st.markdown("🟡 **Jaune** : Prix modéré")
-        with col_leg3:
-            st.markdown("🟠 **Bordure orange** : Recommandation prioritaire (>30% réduction)")
+        # Interface de validation/modification
+        st.markdown("---")
+        st.markdown("### ✏️ Valider ou modifier les prix")
         
-        # Statistiques
+        col_select1, col_select2 = st.columns(2)
+        
+        with col_select1:
+            # Sélection du jour
+            jour_selectionne = st.selectbox(
+                "Jour",
+                JOURS_ORDRE_FR,
+                key="jour_selection"
+            )
+        
+        with col_select2:
+            # Sélection de l'heure (seulement celles disponibles pour ce jour)
+            heures_disponibles = pivot_prix.columns[pivot_prix.loc[jour_selectionne].notna()].tolist()
+            if len(heures_disponibles) > 0:
+                heure_selectionnee = st.selectbox(
+                    "Heure",
+                    heures_disponibles,
+                    key="heure_selection"
+                )
+            else:
+                st.warning("Aucune donnée pour ce jour")
+                heure_selectionnee = None
+        
+        if heure_selectionnee:
+            # Récupérer les infos du créneau
+            idx_jour = pivot_prix.index.get_loc(jour_selectionne)
+            idx_heure = pivot_prix.columns.get_loc(heure_selectionnee)
+            
+            prix_propose = pivot_prix.iloc[idx_jour, idx_heure]
+            taux_actuel = pivot_taux.iloc[idx_jour, idx_heure]
+            reduction_pct = pivot_reduction.iloc[idx_jour, idx_heure]
+            est_recommande = pivot_recommande.iloc[idx_jour, idx_heure]
+            
+            # Afficher les infos
+            col_info1, col_info2, col_info3 = st.columns(3)
+            with col_info1:
+                st.metric("Prix proposé", f"{prix_propose:.1f}€")
+            with col_info2:
+                st.metric("Taux actuel", f"{taux_actuel:.0f}%")
+            with col_info3:
+                st.metric("Réduction", f"-{reduction_pct:.0f}%")
+            
+            if est_recommande:
+                st.success("🎯 Ce créneau est **recommandé** (forte réduction)")
+            
+            # Actions
+            col_action1, col_action2, col_action3 = st.columns(3)
+            
+            with col_action1:
+                if st.button("✅ Valider ce prix", use_container_width=True, type="primary"):
+                    st.session_state.prix_valides[(jour_selectionne, heure_selectionnee)] = prix_propose
+                    st.success(f"✅ Prix {prix_propose:.1f}€ validé pour {jour_selectionne} {heure_selectionnee}")
+                    st.rerun()
+            
+            with col_action2:
+                # Modification manuelle du prix
+                nouveau_prix = st.number_input(
+                    "Ou modifier le prix",
+                    min_value=float(prix_plancher),
+                    max_value=20.0,
+                    value=float(prix_propose),
+                    step=0.5,
+                    key="nouveau_prix_input"
+                )
+                
+                if st.button("💾 Enregistrer ce prix", use_container_width=True):
+                    st.session_state.prix_valides[(jour_selectionne, heure_selectionnee)] = nouveau_prix
+                    st.success(f"✅ Prix {nouveau_prix:.1f}€ enregistré pour {jour_selectionne} {heure_selectionnee}")
+                    st.rerun()
+            
+            with col_action3:
+                if (jour_selectionne, heure_selectionnee) in st.session_state.prix_valides:
+                    if st.button("🗑️ Annuler validation", use_container_width=True):
+                        del st.session_state.prix_valides[(jour_selectionne, heure_selectionnee)]
+                        st.info("🔄 Validation annulée")
+                        st.rerun()
+        
+        # Actions groupées
+        st.markdown("---")
+        col_groupe1, col_groupe2, col_groupe3 = st.columns(3)
+        
+        with col_groupe1:
+            if st.button("✅ Valider TOUS les créneaux recommandés (verts)", use_container_width=True):
+                nb_valides = 0
+                for i in range(len(pivot_prix.index)):
+                    for j in range(len(pivot_prix.columns)):
+                        if pivot_recommande.iloc[i, j] == True and pd.notna(pivot_prix.iloc[i, j]):
+                            jour = pivot_prix.index[i]
+                            heure = pivot_prix.columns[j]
+                            prix = pivot_prix.iloc[i, j]
+                            st.session_state.prix_valides[(jour, heure)] = prix
+                            nb_valides += 1
+                st.success(f"✅ {nb_valides} créneaux recommandés validés !")
+                st.rerun()
+        
+        with col_groupe2:
+            if st.button("✅ Valider TOUS les créneaux", use_container_width=True):
+                nb_valides = 0
+                for i in range(len(pivot_prix.index)):
+                    for j in range(len(pivot_prix.columns)):
+                        if pd.notna(pivot_prix.iloc[i, j]):
+                            jour = pivot_prix.index[i]
+                            heure = pivot_prix.columns[j]
+                            prix = pivot_prix.iloc[i, j]
+                            st.session_state.prix_valides[(jour, heure)] = prix
+                            nb_valides += 1
+                st.success(f"✅ {nb_valides} créneaux validés !")
+                st.rerun()
+        
+        with col_groupe3:
+            if st.button("🔄 Réinitialiser tout", use_container_width=True):
+                st.session_state.prix_valides = {}
+                st.info("🔄 Toutes les validations annulées")
+                st.rerun()
+        
+        # Afficher le résumé
+        nb_valides = len(st.session_state.prix_valides)
         nb_recommandes = pivot_recommande.sum().sum()
         nb_total = pivot_prix.notna().sum().sum()
-        st.info(f"📊 **{nb_recommandes} créneaux recommandés** sur {nb_total} créneaux analysés ({nb_recommandes/nb_total*100:.1f}%)")
+        
+        if nb_valides > 0:
+            st.success(f"📊 **{nb_valides} prix validé(s)** sur {nb_total} créneaux | {nb_recommandes} créneaux recommandés (vert)")
+        else:
+            st.info(f"📊 **{nb_recommandes} créneaux recommandés** (vert) sur {nb_total} créneaux analysés")
 
         
         st.markdown("---")
         
         # ============================================================
-        # GRAPHIQUE 2 : TAUX D'OCCUPATION PAR TERRAIN (HC vs HP)
+        # GRAPHIQUE 2 : NOMBRE D'HEURES RÉSERVÉES PAR TERRAIN (HC vs HP)
         # ============================================================
-        st.subheader("📊 2. Taux d'occupation par terrain (du plus rempli au moins rempli)")
+        st.subheader("📊 2. Heures réservées par terrain (du plus rempli au moins rempli)")
         
-        # Calculer les taux par terrain et type de créneau (HC/HP)
+        # Calculer le nombre d'heures réservées par terrain et type de créneau (HC/HP)
         # HC = Heures Creuses (semaine + weekend matin/fin journée)
         # HP = Heures Pleines (weekend après-midi/soirée)
         df['type_creneau'] = df.apply(lambda row: 
@@ -570,74 +677,70 @@ if uploaded_file is not None:
             axis=1
         )
         
-        # Calculer les taux par terrain
-        taux_par_terrain = df.groupby(['terrain', 'type_creneau']).agg({
-            'statut': lambda x: (x == 'réservé').sum() / len(x) * 100
-        }).reset_index()
-        taux_par_terrain.columns = ['terrain', 'type_creneau', 'taux']
+        # Compter le nombre d'heures réservées par terrain et type
+        heures_par_terrain = df[df['statut'] == 'réservé'].groupby(['terrain', 'type_creneau']).size().reset_index()
+        heures_par_terrain.columns = ['terrain', 'type_creneau', 'nb_heures']
         
-        # Calculer le taux global par terrain pour le tri
-        taux_global = df.groupby('terrain').agg({
-            'statut': lambda x: (x == 'réservé').sum() / len(x) * 100
-        }).reset_index()
-        taux_global.columns = ['terrain', 'taux_global']
-        taux_global = taux_global.sort_values('taux_global', ascending=False)
+        # Calculer le total d'heures réservées par terrain pour le tri
+        heures_total = df[df['statut'] == 'réservé'].groupby('terrain').size().reset_index()
+        heures_total.columns = ['terrain', 'nb_heures_total']
+        heures_total = heures_total.sort_values('nb_heures_total', ascending=False)
         
         # Créer le graphique avec barres EMPILÉES
-        fig_occupation = go.Figure()
+        fig_heures = go.Figure()
         
         # Barres HC (en bas)
-        df_hc = taux_par_terrain[taux_par_terrain['type_creneau'] == 'HC'].set_index('terrain')
-        df_hc = df_hc.reindex(taux_global['terrain'])
+        df_hc_heures = heures_par_terrain[heures_par_terrain['type_creneau'] == 'HC'].set_index('terrain')
+        df_hc_heures = df_hc_heures.reindex(heures_total['terrain'], fill_value=0)
         
-        fig_occupation.add_trace(go.Bar(
-            x=['Terrain ' + str(t) for t in df_hc.index],
-            y=df_hc['taux'].values,
+        fig_heures.add_trace(go.Bar(
+            x=['Terrain ' + str(t) for t in df_hc_heures.index],
+            y=df_hc_heures['nb_heures'].values,
             name='Heures Creuses (HC)',
             marker=dict(color='#87CEEB'),
-            text=df_hc['taux'].apply(lambda x: f"{x:.0f}%").values,
+            text=df_hc_heures['nb_heures'].apply(lambda x: f"{int(x)}h" if x > 0 else "").values,
             textposition='inside',
             textfont=dict(color='white', size=12),
-            hovertemplate='<b>%{x}</b><br>HC: %{y:.1f}%<extra></extra>'
+            hovertemplate='<b>%{x}</b><br>HC: %{y:.0f} heures<extra></extra>'
         ))
         
         # Barres HP (empilées au-dessus)
-        df_hp = taux_par_terrain[taux_par_terrain['type_creneau'] == 'HP'].set_index('terrain')
-        df_hp = df_hp.reindex(taux_global['terrain'])
+        df_hp_heures = heures_par_terrain[heures_par_terrain['type_creneau'] == 'HP'].set_index('terrain')
+        df_hp_heures = df_hp_heures.reindex(heures_total['terrain'], fill_value=0)
         
-        fig_occupation.add_trace(go.Bar(
-            x=['Terrain ' + str(t) for t in df_hp.index],
-            y=df_hp['taux'].values,
+        fig_heures.add_trace(go.Bar(
+            x=['Terrain ' + str(t) for t in df_hp_heures.index],
+            y=df_hp_heures['nb_heures'].values,
             name='Heures Pleines (HP)',
             marker=dict(color='#FF6B6B'),
-            text=df_hp['taux'].apply(lambda x: f"{x:.0f}%").values,
+            text=df_hp_heures['nb_heures'].apply(lambda x: f"{int(x)}h" if x > 0 else "").values,
             textposition='inside',
             textfont=dict(color='white', size=12),
-            hovertemplate='<b>%{x}</b><br>HP: %{y:.1f}%<extra></extra>'
+            hovertemplate='<b>%{x}</b><br>HP: %{y:.0f} heures<extra></extra>'
         ))
         
-        fig_occupation.update_layout(
-            title="Taux d'occupation par terrain (triés du plus rempli au moins rempli)",
+        fig_heures.update_layout(
+            title="Nombre d'heures réservées par terrain (triés du plus au moins réservé)",
             xaxis_title="Terrain",
-            yaxis_title="Taux d'occupation (%)",
+            yaxis_title="Nombre d'heures réservées",
             height=450,
-            barmode='stack',  # MODE EMPILÉ au lieu de 'group'
+            barmode='stack',  # MODE EMPILÉ
             showlegend=True,
-            yaxis=dict(range=[0, 100]),
             hovermode='x unified'
         )
         
-        st.plotly_chart(fig_occupation, use_container_width=True, key="graphique_occupation")
+        st.plotly_chart(fig_heures, use_container_width=True, key="graphique_heures")
         
         # Insights
-        terrain_plus_rempli = taux_global.iloc[0]
-        terrain_moins_rempli = taux_global.iloc[-1]
+        terrain_plus_reserve = heures_total.iloc[0]
+        terrain_moins_reserve = heures_total.iloc[-1]
         
         col_insight1, col_insight2 = st.columns(2)
         with col_insight1:
-            st.success(f"🏆 **Terrain le plus performant : Terrain {terrain_plus_rempli['terrain']}**\n\n{terrain_plus_rempli['taux_global']:.0f}% de remplissage")
+            st.success(f"🏆 **Terrain le plus réservé : Terrain {terrain_plus_reserve['terrain']}**\n\n{terrain_plus_reserve['nb_heures_total']:.0f} heures réservées")
         with col_insight2:
-            st.warning(f"⚠️ **Terrain à optimiser : Terrain {terrain_moins_rempli['terrain']}**\n\n{terrain_moins_rempli['taux_global']:.0f}% de remplissage - Potentiel de {100-terrain_moins_rempli['taux_global']:.0f}% d'amélioration")
+            st.warning(f"⚠️ **Terrain à optimiser : Terrain {terrain_moins_reserve['terrain']}**\n\n{terrain_moins_reserve['nb_heures_total']:.0f} heures réservées")
+
         
         st.markdown("---")
         
